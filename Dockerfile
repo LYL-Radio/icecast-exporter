@@ -1,5 +1,7 @@
 FROM golang:alpine AS build
 
+LABEL org.opencontainers.image.source https://github.com/LYL-Radio/icecast-docker
+
 WORKDIR /go/src/icecast_exporter
 
 RUN apk add --no-cache git
