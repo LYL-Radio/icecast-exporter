@@ -1,4 +1,4 @@
-module github.com/radiofrance/icecast_exporter
+module github.com/LYL-Radio/icecast-exporter
 
 go 1.13
 

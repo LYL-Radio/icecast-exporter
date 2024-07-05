@@ -1,19 +1,20 @@
 FROM golang:alpine AS build
 
-LABEL org.opencontainers.image.source https://github.com/LYL-Radio/icecast-docker
-
-WORKDIR /go/src/icecast_exporter
-
-RUN apk add --no-cache git
-
-COPY . /go/src/icecast_exporter
-
-RUN go get .
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY *.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /icecast_exporter
 
 # Final stage
 FROM alpine
 
-COPY --from=build /go/bin/icecast_exporter /icecast_exporter
+LABEL author "Markus Lindenberg"
+LABEL maintainer "me@maxep.me"
+LABEL description "Exporter for Icecast stats"
+LABEL org.opencontainers.image.source https://github.com/LYL-Radio/icecast-exporter
+
+COPY --from=build /icecast_exporter /icecast_exporter
 
 EXPOSE 9146
 USER nobody
