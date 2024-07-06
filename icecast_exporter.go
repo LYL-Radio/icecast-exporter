@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -39,7 +39,6 @@ const (
 
 var (
 	labelNames = []string{"listenurl", "server_type"}
-	timeFormat = iso8601
 )
 
 type ISO8601 time.Time
@@ -54,7 +53,7 @@ func (ts *ISO8601) UnmarshalJSON(data []byte) error {
 		*ts = ISO8601(time.Time{})
 		return nil
 	}
-	parsed, err := time.Parse(`"2006-01-02T15:04:05-0700"`, s)
+	parsed, err := time.Parse(`"`+iso8601+`"`, s)
 	if err != nil {
 		return err
 	}
@@ -62,40 +61,18 @@ func (ts *ISO8601) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type IcecastTime time.Time
-
-func (ts IcecastTime) Time() time.Time {
-	return time.Time(ts)
-}
-
-func (ts *IcecastTime) UnmarshalJSON(data []byte) error {
-	s := string(data)
-	if s == "null" || s == `""` {
-		*ts = IcecastTime(time.Time{})
-		return nil
-	}
-	parsed, err := time.Parse(`"`+timeFormat+`"`, s)
-	if err != nil {
-		return err
-	}
-	*ts = IcecastTime(parsed)
-	return nil
-}
-
 type IcecastStatusSource struct {
-	Listeners          int         `json:"listeners"`
-	Listenurl          string      `json:"listenurl"`
-	ServerType         string      `json:"server_type"`
-	SlowListeners      int         `json:"slow_listeners"`
-	StreamStartIso8601 ISO8601     `json:"stream_start_iso8601"`
-	StreamStart        IcecastTime `json:"stream_start"`
+	Listeners          int     `json:"listeners"`
+	Listenurl          string  `json:"listenurl"`
+	ServerType         string  `json:"server_type"`
+	SlowListeners      int     `json:"slow_listeners"`
+	StreamStartIso8601 ISO8601 `json:"stream_start_iso8601"`
 }
 
 // JSON structure if zero or multiple streams active
 type IcecastStatus struct {
 	Icestats struct {
 		ServerStartIso8601 ISO8601               `json:"server_start_iso8601"`
-		ServerStart        IcecastTime           `json:"server_start"`
 		Source             []IcecastStatusSource `json:"source,omitifempty"`
 	} `json:"icestats"`
 }
@@ -104,7 +81,6 @@ type IcecastStatus struct {
 type IcecastStatusSingle struct {
 	Icestats struct {
 		ServerStartIso8601 ISO8601             `json:"server_start_iso8601"`
-		ServerStart        IcecastTime         `json:"server_start"`
 		Source             IcecastStatusSource `json:"source"`
 	} `json:"icestats"`
 }
@@ -204,16 +180,11 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.streamStart.Reset()
 
 	if s := <-status; s != nil {
-		e.serverStart.Set(float64(s.Icestats.ServerStart.Time().Unix()))
+		e.serverStart.Set(float64(s.Icestats.ServerStartIso8601.Time().Unix()))
 		for _, source := range s.Icestats.Source {
 			e.listeners.WithLabelValues(source.Listenurl, source.ServerType).Set(float64(source.Listeners))
 			e.slowListeners.WithLabelValues(source.Listenurl, source.ServerType).Set(float64(source.SlowListeners))
-			switch timeFormat {
-			case iso8601:
-				e.streamStart.WithLabelValues(source.Listenurl, source.ServerType).Set(float64(source.StreamStartIso8601.Time().Unix()))
-			default:
-				e.streamStart.WithLabelValues(source.Listenurl, source.ServerType).Set(float64(source.StreamStart.Time().Unix()))
-			}
+			e.streamStart.WithLabelValues(source.Listenurl, source.ServerType).Set(float64(source.StreamStartIso8601.Time().Unix()))
 		}
 	}
 
@@ -242,7 +213,7 @@ func (e *Exporter) scrape(status chan<- *IcecastStatus) {
 
 	// Copy response body into intermediate buffer,
 	// so we can deserialize twice
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		e.up.Set(0)
 		log.Errorf("Can't ready response body: %v", err)
@@ -266,7 +237,7 @@ func (e *Exporter) scrape(status chan<- *IcecastStatus) {
 		}
 
 		// Copy over to staus object
-		s.Icestats.ServerStart = s2.Icestats.ServerStart
+		s.Icestats.ServerStartIso8601 = s2.Icestats.ServerStartIso8601
 		s.Icestats.Source = []IcecastStatusSource{s2.Icestats.Source}
 	}
 
@@ -275,11 +246,10 @@ func (e *Exporter) scrape(status chan<- *IcecastStatus) {
 
 func main() {
 	var (
-		listenAddress     = flag.String("web.listen-address", ":9146", "Address to listen on for web interface and telemetry.")
-		metricsPath       = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
-		icecastScrapeURI  = flag.String("icecast.scrape-uri", "http://localhost:8000/status-json.xsl", "URI on which to scrape Icecast.")
-		icecastTimeFormat = flag.String("icecast.time-format", iso8601, "Time format used by Icecast.")
-		icecastTimeout    = flag.Duration("icecast.timeout", 5*time.Second, "Timeout for trying to get stats from Icecast.")
+		listenAddress    = flag.String("web.listen-address", ":9146", "Address to listen on for web interface and telemetry.")
+		metricsPath      = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+		icecastScrapeURI = flag.String("icecast.scrape-uri", "http://localhost:8000/status-json.xsl", "URI on which to scrape Icecast.")
+		icecastTimeout   = flag.Duration("icecast.timeout", 5*time.Second, "Timeout for trying to get stats from Icecast.")
 	)
 	flag.Parse()
 
@@ -287,7 +257,6 @@ func main() {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
-	timeFormat = *icecastTimeFormat
 	exporter := NewExporter(*icecastScrapeURI, *icecastTimeout)
 	prometheus.MustRegister(exporter)
 
